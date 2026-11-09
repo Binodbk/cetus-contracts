@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F1 — Legacy `emergency_unpause` bypasses the v15 package-version cap: one role can permanently freeze every pool</title>
+<style>
+@page { size: A4; margin: 18mm 15mm; }
+:root { --ink:#111; --mut:#555; --line:#d7dbe0; --accent:#0b5fff; --warn:#b00020; }
+* { box-sizing: border-box; }
+body { font: 11pt/1.5 -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+       color: var(--ink); max-width: 900px; margin: 0 auto; padding: 28px 22px 60px; }
+h1 { font-size: 21pt; line-height: 1.2; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 13.5pt; margin: 30px 0 10px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+h3 { font-size: 11.5pt; margin: 20px 0 6px; }
+p, li { margin: 7px 0; }
+ul, ol { padding-left: 22px; }
+code { font: 9.5pt/1.45 "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+       background: #f4f6f8; padding: 1px 4px; border-radius: 3px; }
+pre { background: #f7f8fa; border: 1px solid var(--line); border-left: 3px solid var(--accent);
+      border-radius: 4px; padding: 11px 13px; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: none; padding: 0; font-size: 9pt; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 9.8pt;
+        page-break-inside: avoid; }
+th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+th { background: #f2f4f7; font-weight: 600; }
+blockquote { margin: 12px 0; padding: 8px 14px; border-left: 3px solid #ffb300;
+             background: #fffdf3; color: #3a3a3a; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 26px 0; }
+.cover { border: 1px solid var(--line); border-radius: 6px; padding: 18px 20px; margin: 0 0 26px;
+         background: #fbfcfd; }
+.cover .kicker { font-size: 9pt; letter-spacing: .12em; text-transform: uppercase; color: var(--mut); }
+.cover .sub { color: var(--mut); font-size: 10pt; margin-top: 8px; }
+.cover .badge { display: inline-block; margin-top: 12px; padding: 4px 10px; border-radius: 999px;
+                background: #fff1f2; color: var(--warn); border: 1px solid #ffd0d6;
+                font-size: 9pt; font-weight: 600; }
+.footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
+          color: var(--mut); font-size: 8.8pt; }
+@media print { a { color: inherit; text-decoration: none; } }
+</style></head>
+<body>
+<div class="cover">
+  <div class="kicker">Security assessment &middot; Cetus CLMM (Sui Move) &middot; source snapshot b7c3a5a</div>
+  <h1>F1 — Legacy `emergency_unpause` bypasses the v15 package-version cap: one role can permanently freeze every pool</h1>
+  <div class="sub">Target: <code>cetus_clmm::config</code> &middot; deployed v14 (active) and v15 &middot;
+  PoC: <code>packages/cetus_clmm/tests/emergency_unpause_legacy_bypass_tests.move</code> &middot;
+  scripts: <code>exploits/</code></div>
+  <div class="badge">Unrecoverable protocol-wide freeze &middot; requires ACL bit 5</div>
+</div>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Severity</strong></td>
+<td>Critical impact / High likelihood-in-role — <em>permanent, protocol-wide loss of access to 100 % of pooled funds</em></td>
+</tr>
+<tr>
+<td><strong>Class</strong></td>
+<td>Cross-version callable-surface (stale package still authoritative), missing input bound, unrecoverable state</td>
+</tr>
+<tr>
+<td><strong>Component</strong></td>
+<td><code>cetus_clmm::config</code> — <code>emergency_pause</code>, <code>emergency_unpause</code>, <code>update_package_version</code>, <code>checked_package_version</code></td>
+</tr>
+<tr>
+<td><strong>Versions</strong></td>
+<td>Live on <code>v14</code> (currently active, <code>VERSION = 14</code>); <strong>not fixed</strong> by <code>v15</code>, <code>VERSION = 15</code></td>
+</tr>
+<tr>
+<td><strong>Precondition</strong></td>
+<td>ACL bit 5 (<code>ACL_EMERGENCY_UNPAUSE</code> in v15 / <code>ACL_EMERGENCY_PAUSE</code> in v14 and earlier) — a role that v15 explicitly treats as <em>harmless and unpause-only</em></td>
+</tr>
+<tr>
+<td><strong>PoC</strong></td>
+<td><code>packages/cetus_clmm/tests/emergency_unpause_legacy_bypass_tests.move</code></td>
+</tr>
+<tr>
+<td><strong>Status</strong></td>
+<td>Open — the v15 mitigation is correct but unreachable-in-effect because it lives in only one of the callable packages</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2>1. Summary</h2>
+<p><code>config::emergency_unpause(config, version, ctx)</code> writes an <strong>attacker-chosen <code>u64</code> into <code>GlobalConfig.package_version</code></strong>, and <code>package_version</code> is the global kill switch: every money path in <code>pool.move</code> begins with <code>checked_package_version</code>, i.e. <code>assert!(VERSION &gt;= config.package_version, EPackageVersionDeprecate)</code> (<code>config.move:524-526</code>, 27 call sites in <code>pool.move</code>).</p>
+<p>v15 hardened this function in PR #6 (<code>optimize emergency unpause version validation</code>) by adding an upper bound:</p>
+<pre><code class="language-move">// config.move:554-573 (v15)
+assert!(version &gt;= before_version &amp;&amp; version &lt;= package_version(), EInvalidPackageVersion);
+config.package_version = version;
+</code></pre>
+<p><code>package_version()</code> returns the <strong>calling package's</strong> <code>VERSION</code> constant (<code>config.move:587-589</code>), so the bound is <code>version &lt;= 15</code> — correct for v15.</p>
+<p><strong>The bound does not exist anywhere on-chain except inside the v15 package.</strong> Sui packages are immutable and old versions stay callable, and <code>emergency_pause</code> / <code>emergency_unpause</code> are deliberately <em>not</em> version-gated (they must work while the protocol is paused). The v14 package — and every older one — therefore remains a permanently available entry point into the same <code>GlobalConfig</code> with the weaker rule:</p>
+<pre><code class="language-move">// config.move:539-554 (v14, branch `version-14`)
+public fun emergency_unpause(config: &amp;mut GlobalConfig, version: u64, ctx: &amp;TxContext) {
+    check_emergency_pause_role(config, tx_context::sender(ctx));   // ACL bit 5
+    assert!(dynamic_field::exists_with_type&lt;..&gt;(EMERGENCY_PAUSE_BEFORE_VERSION), EProtocolNotEmergencyPause);
+    let before_version = dynamic_field::remove&lt;..&gt;(EMERGENCY_PAUSE_BEFORE_VERSION);
+    assert!(version &gt;= before_version, EInvalidPackageVersion);    // &lt;-- no upper bound
+    config.package_version = version;                             // &lt;-- unbounded write
+}
+</code></pre>
+<p>So the vulnerable primitive that PR #6 was written to remove is <strong>still live</strong>, just in the older module.</p>
+<h2>2. Attack</h2>
+<p><code>bit5</code> = holder of ACL bit 5 (in v15 this is the <em>unpause-only</em> key, kept at bit 5 by design: “<em>Keep the legacy role at bit 5 so existing multisig unpause permissions remain valid</em>”, <code>config.move:54</code>).</p>
+<p>Single transaction, three commands:</p>
+<ol>
+<li><code>v14::config::emergency_pause(&amp;mut GlobalConfig, &amp;ctx)</code> — v14 checks <strong>bit 5</strong> (v15 would have required the new bit 6). Sets <code>package_version = 2^63</code>, records <code>before_version</code>.</li>
+<li><code>v14::config::emergency_unpause(&amp;mut GlobalConfig, 0x7FFFFFFFFFFFFFFF, &amp;ctx)</code> — only <code>version &gt;= before_version</code> is checked. Sets <code>package_version = 2^63 - 1</code>.</li>
+<li>Done. Every CLMM pool is now permanently frozen.</li>
+</ol>
+<p>Variants:</p>
+<ul>
+<li>If the protocol is already paused for a genuine emergency (the exact scenario the emergency mechanism exists for), step 1 is skipped and <strong>the unpause-only key alone completes the attack</strong>.</li>
+<li><code>u64::MAX</code> works equally well; <code>2^63 - 1</code> is the <em>minimum</em> value that is irrecoverable and it does <strong>not</strong> trip the <code>EMERGENCY_PAUSE_VERSION</code> sentinel, so the config does not even look paused.</li>
+<li>Because step 1 uses the v14 module, the v15 role split is void even without the brick: the “unpause-only” key can still pause, so the property “<em>the emergency pause role can pause the protocol without being able to unpause it</em>” (<code>config.move:21-22</code>) does not hold on-chain.</li>
+</ul>
+<h2>3. Why the state is unrecoverable</h2>
+<p>Let <code>v = 2^63 - 1</code>. Every write to <code>package_version</code> is monotone or bounded below by <code>before_version</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Assertion</th>
+<th>Result at <code>v</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>update_package_version</code> (<code>config.move:575-585</code>)</td>
+<td><code>version &gt; old &amp;&amp; version &lt; 2^63</code></td>
+<td>needs <code>v &lt; version &lt; 2^63</code> — <strong>no u64 exists</strong></td>
+</tr>
+<tr>
+<td><code>emergency_pause</code> (<code>config.move:540-552</code>)</td>
+<td>none (bit 6 only)</td>
+<td>sets <code>2^63</code>, records <code>before = v</code></td>
+</tr>
+<tr>
+<td><code>emergency_unpause</code> v15</td>
+<td><code>version &gt;= before_version &amp;&amp; version &lt;= 15</code></td>
+<td>requires <code>version &gt;= v</code> <strong>and</strong> <code>&lt;= 15</code> — <strong>empty set</strong></td>
+</tr>
+<tr>
+<td><code>emergency_unpause</code> v14</td>
+<td><code>version &gt;= before_version</code></td>
+<td>can only set <code>&gt;= v</code> — still frozen</td>
+</tr>
+<tr>
+<td>any <code>pool::*</code> money path</td>
+<td><code>VERSION &gt;= config.package_version</code></td>
+<td><code>15 &gt;= 2^63-1</code> false — <strong>aborts <code>EPackageVersionDeprecate</code></strong></td>
+</tr>
+<tr>
+<td>a future package (e.g. <code>VERSION = 16</code>)</td>
+<td>same check</td>
+<td>also false — <strong>also dead</strong></td>
+</tr>
+</tbody>
+</table>
+<p>There is no <code>set_package_version</code> that can lower the value, and the new package cannot bypass the check without deleting <code>checked_package_version</code> from all 27 money paths. The only theoretical escape is shipping a package that deliberately ignores the version gate — i.e. abandoning the upgrade-safety mechanism that the gate exists to provide.</p>
+<h2>4. Impact</h2>
+<ul>
+<li><code>add_liquidity</code> / <code>add_liquidity_fix_coin</code> / <code>repay_add_liquidity</code>, <code>remove_liquidity</code>, <code>close_position</code>, <code>collect_fee</code>, <code>collect_reward</code>, <code>flash_swap</code>, <code>flash_loan</code>, <code>collect_protocol_fee*</code>, <code>update_emission</code>, <code>init_position_snapshot</code> — all 27 gated entry points abort.</li>
+<li>Every LP position in every pool is permanently unwithdrawable, and the protocol can never be upgraded back into service. Total value locked is frozen, not stolen — but permanently.</li>
+<li>It also destroys the recovery mechanism: after a real incident, the pause/unpause ceremony (the one added <em>because of</em> May 2025) can be turned into the incident.</li>
+</ul>
+<p>This is the same failure class as the BlueMove cross-version reserve desync (July 2026): <em>two callable versions of the same protocol, where the newer version's invariant is enforced only in the newer code.</em> Cetus is structurally exposed to it because Sui never retires old packages and because the emergency functions are intentionally un-gated.</p>
+<h2>5. Why the v15 fix is insufficient (three separate reasons)</h2>
+<ol>
+<li><strong>Wrong scope.</strong> The cap is compiled into v15 only. The un-capped body remains callable in v14 and every earlier package, forever.</li>
+<li><strong>Wrong dimension.</strong> The cap bounds the version but not <em>who may write it</em>: v15 still lets the unpause key pick any value in <code>[before_version, 15]</code> — including <code>15</code> while the deployed code is older, or <code>14</code> to re-activate a retired package's <code>checked_package_version</code> semantics.</li>
+<li><strong>Role split not enforceable.</strong> Bit 5 keeps pause power through legacy packages, so v15's separation of pause (bit 6) from unpause (bit 5) — the actual security property PR #6 was introduced for — is not a property of the deployed system.</li>
+</ol>
+<h2>6. Reproduction</h2>
+<p>Offline (no keys, no network) — the primary artefact:</p>
+<pre><code class="language-bash">cd packages/cetus_clmm
+sui move test emergency_unpause_legacy_bypass
+</code></pre>
+<p>On a live network, dry-run only (see <code>exploits/README.md</code>):</p>
+<pre><code class="language-bash">export RPC_URL=https://fullnode.testnet.sui.io:443 CONFIG=0x… PKG_LEGACY=0x…
+npx tsx exploits/f1_emergency_unpause_brick.ts            # simulate the PTB
+./exploits/verify_f1.sh                                    # read-only checks
+./exploits/f1_brick.sh                                     # same PTB via sui client ptb
+</code></pre>
+<p>The suite asserts: v15 rejects the write (<code>EInvalidPackageVersion</code>); the legacy-equivalent write makes <code>remove_liquidity</code> abort with <code>EPackageVersionDeprecate</code>; and neither the <code>AdminCap</code> path nor the pause/unpause path can restore service. (The v15 toolchain is not installed in this workspace, so the tests are written to the package's existing idioms — <code>phase1_liquidity_receipt_tests.move</code>, <code>phase2_recovery_tests.move</code> — but were not executed here.)</p>
+<h2>7. Remediation</h2>
+<p>On-chain (cannot be done by patching v15):</p>
+<ol>
+<li><strong>Revoke bit 5 from every address that is not intended to hold full pause power</strong>, then re-grant it only to the dedicated unpause multisig. Until that is done, treat bit 5 as a full-power admin key, not an unpause-only role — and document that the v15 pause/unpause split does not hold.</li>
+<li>Ship a <strong>recovery hatch in a new package that does not call <code>checked_package_version</code></strong>: an <code>AdminCap</code>-gated (ideally timelocked) <code>restore_package_version(config, version)</code> that may <em>lower</em> <code>package_version</code> below <code>2^63</code> but only when <code>config.package_version &gt;= 2^63 - 1</code>. Without it, any poisoning — malicious or accidental — is terminal.</li>
+<li>Make the recovery independent of the emergency path: <code>update_package_version</code> should accept any value <code>&lt; EMERGENCY_PAUSE_VERSION</code> (it currently requires monotonic growth, which is what turns a bad write into a permanent one).</li>
+</ol>
+<p>In code (v16+):</p>
+<ol start="4">
+<li>Bound the write by the <em>deployed</em> maximum, not by the caller's constant: compare against a value stored in <code>GlobalConfig</code> at upgrade time, and require <code>version &lt;= max_supported_version</code> where <code>max_supported_version</code> is advanced only by <code>update_package_version</code>.</li>
+<li>Add an event-and-monitor canary on <code>SetPackageVersion</code> / <code>emergency_unpause</code> for <code>version &gt;= 2^63 - 1</code>; alerting on that single condition closes the window to one transaction.</li>
+<li>Any future hardening of <code>emergency_*</code> must be understood as <em>advisory only</em>: the deployed system is the union of all callable packages. Harden by making the new package tolerate the old packages' behaviour (e.g. reject/repair out-of-range values on read), not by assuming the old code disappears.</li>
+</ol>
+<h2>8. Secondary observations (reviewed, lower severity)</h2>
+<ul>
+<li><strong><code>pool.move:1375,1404</code></strong> — <code>//check_pool_manager_role(...)</code> is commented out in <code>initialize_rewarder</code> and <code>update_emission</code>; the only guard left is <code>check_rewarder_manager_role</code>. The pool manager's veto over installing/accelerating rewards on a pool is gone. A rewarder manager can therefore create a rewarder on any pool and set an emission schedule; the reward budget still comes from the shared <code>RewarderGlobalVault</code>, so this is an ACL-reduction finding (privileged), not an unprivileged drain.</li>
+<li><strong><code>pool.move:1350-1361</code></strong> — <code>collect_protocol_fee_with_cap</code> authorises against <code>object::id_address(cap)</code> rather than <code>tx_context::sender</code>. This is <strong>not</strong> a bypass (the cap's own address must still be granted the claim role via <code>set_roles</code>, and <code>mint_protocol_fee_collect_cap</code> is <code>AdminCap</code>-gated at <code>pool.move:514-521</code>), but it means (a) revocation must enumerate cap object addresses, not operators, and (b) transferring the cap transfers collection rights with no ACL change.</li>
+<li><strong><code>pool.move:865-903</code></strong> — <code>close_position</code> omits the <code>assert_no_pending_add_liquidity</code> that <code>remove_liquidity</code> performs (<code>pool.move:769</code>). It cannot be monetised today (<code>position::close_position</code> requires an empty position, and the pending counter is per-pool and only ever non-zero inside a transaction that must consume the receipt), but the invariant “no liquidity operation while an add is unpaid” is inconsistently enforced.</li>
+</ul>
+<h2>9. Bounty eligibility — honest assessment</h2>
+<p><strong>Short answer: probably not payable as a Critical, and not guaranteed to be payable at all. Submit it, but frame it as a broken security control rather than as a drain.</strong></p>
+<p>Most DeFi programs (Cetus's included, per its post-incident disclosure programme) scope findings by the <em>attacker model</em>: a third party with no privileged key, no trusted-role assumption and no user interaction, causing direct loss of user funds. F1 fails the first clause by construction — it needs ACL bit 5 — and it produces a freeze rather than a theft. Under a strict reading of those rules a triager can close it as “admin can do admin things / centralization risk”.</p>
+<p>The three arguments that make it worth submitting anyway:</p>
+<ol>
+<li><strong>v15 explicitly downgrades that key's privilege.</strong> PR #6 and the source comment (<code>config.move:21-22, 54</code>) reclassify bit 5 as <em>“the emergency unpause role can restore the protocol”</em> and state the design goal that the pause role cannot unpause — i.e. the key is documented as <strong>not</strong> a full-power admin key. The precondition of the finding is therefore <em>“holds a deliberately limited role”</em>, not <em>“holds admin”</em>. A limited role that can permanently destroy the protocol contradicts the specification that was shipped specifically to bound it.</li>
+<li><strong>The impact is unrecoverable and protocol-wide</strong>: 100 % of TVL frozen, no admin repair, no upgrade path. Programs that treat “permanent freezing of funds” as equivalent to “loss of funds” would put this at High/Critical and pay against “funds at risk” — the maximum here is the whole TVL, so the cap (typically ~10 % of funds at risk) is the ceiling, not the blocker.</li>
+<li><strong>It is a bypass of a shipped mitigation</strong>, a category many programs pay for at the original severity. The mitigation is real code, merged 2026-04-30; it simply is not the code that is being called.</li>
+</ol>
+<p>What would make it unambiguously Critical (and is worth checking before submitting):</p>
+<ul>
+<li>Any <strong>unprivileged</strong> route to the same two writes. The natural candidate is a historical package: v1…v13 are not in this repository's history, and every package stays callable. If any of them guarded <code>emergency_pause</code> / <code>emergency_unpause</code> with a role bit that is more widely granted — bits 0-4 belong to operational keys (pool, fee-tier, protocol-fee, partner and rewarder managers), i.e. several distinct addresses rather than one admin multisig — then a merely <em>operational</em> key, not an admin key, reaches the freeze, and the finding becomes “a partner manager can permanently freeze the protocol”. I could not verify this: only <code>clmm-v14</code>, <code>clmm-v15</code>, <code>mainnet-v0.14.0</code> and two testnet tags are published upstream, and all of them use bit 5.</li>
+<li>An unprivileged path that makes the <em>state</em> reachable instead of the <em>call</em> — e.g. any place where <code>package_version</code> is written from caller-controlled input without a role check. There is none today: the field has exactly three writers (<code>emergency_pause</code>, <code>emergency_unpause</code>, <code>update_package_version</code>), all guarded.</li>
+</ul>
+<p>Recommended submission channel and framing: <strong>“Broken access-control design / incomplete fix”</strong>, medium-or-higher severity requested, with the explicit note that no capital and no flash loan are required, and that the victim set is every LP in every pool. Expect “acknowledged, out of scope for reward” as the modal outcome; the value of the report is that the on-chain mitigation cannot be repaired by code alone (§7 items 1-3).</p>
+<h2>10. Artefacts</h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Audit/finding-F1-legacy-emergency-unpause-brick.md</code></td>
+<td>this report</td>
+</tr>
+<tr>
+<td><code>packages/cetus_clmm/tests/emergency_unpause_legacy_bypass_tests.move</code></td>
+<td>offline Move PoC (4 tests)</td>
+</tr>
+<tr>
+<td><code>exploits/f1_emergency_unpause_brick.ts</code></td>
+<td>PTB builder + simulator (dry-run default)</td>
+</tr>
+<tr>
+<td><code>exploits/f1_brick.sh</code></td>
+<td>the same PTB through <code>sui client ptb</code></td>
+</tr>
+<tr>
+<td><code>exploits/verify_f1.sh</code></td>
+<td>read-only verification, sends nothing</td>
+</tr>
+<tr>
+<td><code>exploits/README.md</code></td>
+<td>inputs, id discovery, expected results</td>
+</tr>
+<tr>
+<td><code>deliverables/F1-audit-report.html</code></td>
+<td>printable version of this report</td>
+</tr>
+<tr>
+<td><code>deliverables/cetus-clmm-F1-bounty-submission.zip</code></td>
+<td>all of the above, bundled</td>
+</tr>
+</tbody>
+</table>
+<div class="footer">Generated from <code>Audit/finding-F1-legacy-emergency-unpause-brick.md</code>.
+Print this page to PDF (A4) for a signed submission. Line references are to the vendored
+<code>packages/cetus_clmm/sources</code> tree at commit <code>b7c3a5a</code>; v14 references are to
+upstream branch <code>version-14</code>.</div>
+</body></html>

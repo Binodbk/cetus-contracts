@@ -88,9 +88,20 @@ This is the same failure class as the BlueMove cross-version reserve desync (Jul
 
 ## 6. Reproduction
 
+Offline (no keys, no network) — the primary artefact:
+
 ```bash
 cd packages/cetus_clmm
 sui move test emergency_unpause_legacy_bypass
+```
+
+On a live network, dry-run only (see `exploits/README.md`):
+
+```bash
+export RPC_URL=https://fullnode.testnet.sui.io:443 CONFIG=0x… PKG_LEGACY=0x…
+npx tsx exploits/f1_emergency_unpause_brick.ts            # simulate the PTB
+./exploits/verify_f1.sh                                    # read-only checks
+./exploits/f1_brick.sh                                     # same PTB via sui client ptb
 ```
 
 The suite asserts: v15 rejects the write (`EInvalidPackageVersion`); the legacy-equivalent write makes `remove_liquidity` abort with `EPackageVersionDeprecate`; and neither the `AdminCap` path nor the pause/unpause path can restore service. (The v15 toolchain is not installed in this workspace, so the tests are written to the package's existing idioms — `phase1_liquidity_receipt_tests.move`, `phase2_recovery_tests.move` — but were not executed here.)
@@ -114,3 +125,35 @@ In code (v16+):
 * **`pool.move:1375,1404`** — `//check_pool_manager_role(...)` is commented out in `initialize_rewarder` and `update_emission`; the only guard left is `check_rewarder_manager_role`. The pool manager's veto over installing/accelerating rewards on a pool is gone. A rewarder manager can therefore create a rewarder on any pool and set an emission schedule; the reward budget still comes from the shared `RewarderGlobalVault`, so this is an ACL-reduction finding (privileged), not an unprivileged drain.
 * **`pool.move:1350-1361`** — `collect_protocol_fee_with_cap` authorises against `object::id_address(cap)` rather than `tx_context::sender`. This is **not** a bypass (the cap's own address must still be granted the claim role via `set_roles`, and `mint_protocol_fee_collect_cap` is `AdminCap`-gated at `pool.move:514-521`), but it means (a) revocation must enumerate cap object addresses, not operators, and (b) transferring the cap transfers collection rights with no ACL change.
 * **`pool.move:865-903`** — `close_position` omits the `assert_no_pending_add_liquidity` that `remove_liquidity` performs (`pool.move:769`). It cannot be monetised today (`position::close_position` requires an empty position, and the pending counter is per-pool and only ever non-zero inside a transaction that must consume the receipt), but the invariant “no liquidity operation while an add is unpaid” is inconsistently enforced.
+
+## 9. Bounty eligibility — honest assessment
+
+**Short answer: probably not payable as a Critical, and not guaranteed to be payable at all. Submit it, but frame it as a broken security control rather than as a drain.**
+
+Most DeFi programs (Cetus's included, per its post-incident disclosure programme) scope findings by the *attacker model*: a third party with no privileged key, no trusted-role assumption and no user interaction, causing direct loss of user funds. F1 fails the first clause by construction — it needs ACL bit 5 — and it produces a freeze rather than a theft. Under a strict reading of those rules a triager can close it as “admin can do admin things / centralization risk”.
+
+The three arguments that make it worth submitting anyway:
+
+1. **v15 explicitly downgrades that key's privilege.** PR #6 and the source comment (`config.move:21-22, 54`) reclassify bit 5 as *“the emergency unpause role can restore the protocol”* and state the design goal that the pause role cannot unpause — i.e. the key is documented as **not** a full-power admin key. The precondition of the finding is therefore *“holds a deliberately limited role”*, not *“holds admin”*. A limited role that can permanently destroy the protocol contradicts the specification that was shipped specifically to bound it.
+2. **The impact is unrecoverable and protocol-wide**: 100 % of TVL frozen, no admin repair, no upgrade path. Programs that treat “permanent freezing of funds” as equivalent to “loss of funds” would put this at High/Critical and pay against “funds at risk” — the maximum here is the whole TVL, so the cap (typically ~10 % of funds at risk) is the ceiling, not the blocker.
+3. **It is a bypass of a shipped mitigation**, a category many programs pay for at the original severity. The mitigation is real code, merged 2026-04-30; it simply is not the code that is being called.
+
+What would make it unambiguously Critical (and is worth checking before submitting):
+
+* Any **unprivileged** route to the same two writes. The natural candidate is a historical package: v1…v13 are not in this repository's history, and every package stays callable. If any of them guarded `emergency_pause` / `emergency_unpause` with a role bit that is more widely granted — bits 0-4 belong to operational keys (pool, fee-tier, protocol-fee, partner and rewarder managers), i.e. several distinct addresses rather than one admin multisig — then a merely *operational* key, not an admin key, reaches the freeze, and the finding becomes “a partner manager can permanently freeze the protocol”. I could not verify this: only `clmm-v14`, `clmm-v15`, `mainnet-v0.14.0` and two testnet tags are published upstream, and all of them use bit 5.
+* An unprivileged path that makes the *state* reachable instead of the *call* — e.g. any place where `package_version` is written from caller-controlled input without a role check. There is none today: the field has exactly three writers (`emergency_pause`, `emergency_unpause`, `update_package_version`), all guarded.
+
+Recommended submission channel and framing: **“Broken access-control design / incomplete fix”**, medium-or-higher severity requested, with the explicit note that no capital and no flash loan are required, and that the victim set is every LP in every pool. Expect “acknowledged, out of scope for reward” as the modal outcome; the value of the report is that the on-chain mitigation cannot be repaired by code alone (§7 items 1-3).
+
+## 10. Artefacts
+
+| Path | Purpose |
+|---|---|
+| `Audit/finding-F1-legacy-emergency-unpause-brick.md` | this report |
+| `packages/cetus_clmm/tests/emergency_unpause_legacy_bypass_tests.move` | offline Move PoC (4 tests) |
+| `exploits/f1_emergency_unpause_brick.ts` | PTB builder + simulator (dry-run default) |
+| `exploits/f1_brick.sh` | the same PTB through `sui client ptb` |
+| `exploits/verify_f1.sh` | read-only verification, sends nothing |
+| `exploits/README.md` | inputs, id discovery, expected results |
+| `deliverables/F1-audit-report.html` | printable version of this report |
+| `deliverables/cetus-clmm-F1-bounty-submission.zip` | all of the above, bundled |
