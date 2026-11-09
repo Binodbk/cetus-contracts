@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unprivileged (bounty-eligible) surface — systematic review</title>
+<style>
+@page { size: A4; margin: 18mm 15mm; }
+:root { --ink:#111; --mut:#555; --line:#d7dbe0; --accent:#0b5fff; --warn:#b00020; }
+* { box-sizing: border-box; }
+body { font: 11pt/1.5 -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+       color: var(--ink); max-width: 900px; margin: 0 auto; padding: 28px 22px 60px; }
+h1 { font-size: 21pt; line-height: 1.2; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 13.5pt; margin: 30px 0 10px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+h3 { font-size: 11.5pt; margin: 20px 0 6px; }
+p, li { margin: 7px 0; }
+ul, ol { padding-left: 22px; }
+code { font: 9.5pt/1.45 "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+       background: #f4f6f8; padding: 1px 4px; border-radius: 3px; }
+pre { background: #f7f8fa; border: 1px solid var(--line); border-left: 3px solid var(--accent);
+      border-radius: 4px; padding: 11px 13px; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: none; padding: 0; font-size: 9pt; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 9.8pt;
+        page-break-inside: avoid; }
+th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+th { background: #f2f4f7; font-weight: 600; }
+blockquote { margin: 12px 0; padding: 8px 14px; border-left: 3px solid #ffb300;
+             background: #fffdf3; color: #3a3a3a; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 26px 0; }
+.cover { border: 1px solid var(--line); border-radius: 6px; padding: 18px 20px; margin: 0 0 26px;
+         background: #fbfcfd; }
+.cover .kicker { font-size: 9pt; letter-spacing: .12em; text-transform: uppercase; color: var(--mut); }
+.cover .sub { color: var(--mut); font-size: 10pt; margin-top: 8px; }
+.cover .badge { display: inline-block; margin-top: 12px; padding: 4px 10px; border-radius: 999px;
+                background: #fff1f2; color: var(--warn); border: 1px solid #ffd0d6;
+                font-size: 9pt; font-weight: 600; }
+.footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
+          color: var(--mut); font-size: 8.8pt; }
+@media print { a { color: inherit; text-decoration: none; } }
+</style></head>
+<body>
+<div class="cover">
+  <div class="kicker">Security assessment &middot; Cetus CLMM (Sui Move) &middot; source snapshot b7c3a5a</div>
+  <h1>Unprivileged (bounty-eligible) surface — systematic review</h1>
+  <div class="sub">Target: <code>cetus_clmm::config</code> &middot; deployed v14 (active) and v15 &middot;
+  PoC: <code>packages/cetus_clmm/tests/emergency_unpause_legacy_bypass_tests.move</code> &middot;
+  scripts: <code>exploits/</code></div>
+  <div class="badge">Unrecoverable protocol-wide freeze &middot; requires ACL bit 5</div>
+</div>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scope</strong></td>
+<td>everything in <code>packages/cetus_clmm/sources</code> reachable by a signer with <strong>no ACL role</strong> (v15, commit <code>b7c3a5a</code>)</td>
+</tr>
+<tr>
+<td><strong>Question</strong></td>
+<td>is there a <em>previously unknown</em>, unprivileged path to fund loss / permanent DoS — i.e. something a bounty programme would actually pay for?</td>
+</tr>
+<tr>
+<td><strong>Result</strong></td>
+<td><strong>no High/Critical unprivileged finding.</strong> The money core is equivalent to Uniswap v3 and the v15 additions are sound. Four Low/Info items remain, none bounty-eligible.</td>
+</tr>
+<tr>
+<td><strong>Companion</strong></td>
+<td><code>Audit/finding-F1-legacy-emergency-unpause-brick.md</code> (High impact, but <strong>privileged</strong> — see §6)</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2>1. Entry-point matrix (what an anonymous signer can actually call)</h2>
+<table>
+<thead>
+<tr>
+<th>Function(s)</th>
+<th>Value moved</th>
+<th>Guard</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>open_position</code></td>
+<td>none</td>
+<td>version + <code>is_allow_add_liquidity</code></td>
+<td>creates an owned NFT + a dynamic-field <code>PositionInfo</code>; no capital required, no pool-size impact (§3-I11)</td>
+</tr>
+<tr>
+<td><code>add_liquidity</code>, <code>add_liquidity_fix_coin</code>, <code>repay_add_liquidity</code></td>
+<td>in</td>
+<td>version, pending counter</td>
+<td>receipt has no abilities → repayment is atomic</td>
+</tr>
+<tr>
+<td><code>remove_liquidity</code>, <code>remove_liquidity_with_slippage</code>, <code>close_position</code></td>
+<td>out</td>
+<td>version, <code>is_allow_remove_liquidity</code>, pending counter (except <code>close_position</code>)</td>
+<td>amounts recomputed from the current price; rounding floors</td>
+</tr>
+<tr>
+<td><code>collect_fee</code>, <code>collect_reward</code></td>
+<td>out</td>
+<td>version, pause flags, <strong><code>&amp;Position</code> (ownership)</strong></td>
+<td>third parties cannot harvest or destroy another position's accrual</td>
+</tr>
+<tr>
+<td><code>calculate_and_update_fee</code> / <code>_reward(s)</code> / <code>_points</code></td>
+<td>none (accrual only)</td>
+<td>version, pause flags</td>
+<td>take a bare <code>position_id</code> → <strong>anyone</strong> can poke any position, but the mutators are non-destructive (<code>update_fee</code>/<code>update_rewards</code>/<code>update_points</code>, never <code>*_and_reset_*</code>)</td>
+</tr>
+<tr>
+<td><code>flash_swap</code>, <code>flash_swap_with_partner</code>, <code>repay_flash_swap*</code></td>
+<td>both</td>
+<td>version, <code>is_allow_swap</code>, price-limit bound</td>
+<td>receipt bound to <code>pool_id</code>; exact repay</td>
+</tr>
+<tr>
+<td><code>flash_loan</code>, <code>flash_loan_with_partner</code>, <code>repay_flash_loan*</code></td>
+<td>one side</td>
+<td>version, <code>is_allow_flash_loan</code></td>
+<td>exact <code>amount + ceil(fee)</code> repayment</td>
+</tr>
+<tr>
+<td><code>rewarder::deposit_reward</code></td>
+<td>in</td>
+<td>none (permissionless donation)</td>
+<td>no payout path from it without LP position</td>
+</tr>
+<tr>
+<td><code>factory::create_pool_v3</code></td>
+<td>none</td>
+<td><code>PoolCreationCap</code>, fee-tier, price bounds</td>
+<td>pool is the creator's own</td>
+</tr>
+</tbody>
+</table>
+<h2>2. Invariants verified (the audit value of this pass)</h2>
+<ul>
+<li><strong>I1 — fee-growth-inside is exactly Uniswap v3.</strong> <code>tick::get_fee_in_range</code> (<code>tick.move:330-393</code>) uses <code>below = cur &lt; lower ? global - outside : outside</code>, <code>above = cur &lt; upper ? outside : global - outside</code>, <code>inside = global - below - above</code>, with <code>below = global</code> / <code>above = 0</code> when the tick does not exist. Byte-for-byte the reference semantics, including the <code>-1</code> crossing convention used by <code>swap_in_pool</code>.</li>
+<li><strong>I2 — settle-before-mutate.</strong> <code>position::increase_liquidity</code> / <code>decrease_liquidity</code> (<code>position.move:318-375</code>) run <code>update_fee_internal</code>, <code>update_points_internal</code>, <code>update_rewards_internal</code> <strong>before</strong> touching <code>position_info.liquidity</code>. A brand-new position therefore initialises <code>growth_inside</code> to the current value and is credited <code>mul_shr(0, growth) = 0</code> — no retroactive fee/reward harvest. Reversing those two lines would have been a critical theft primitive; it is not reversed.</li>
+<li><strong>I3 — tick first-initialisation</strong> uses <code>cur &lt; tick ? 0 : global</code> (<code>tick.move:610-650</code>), i.e. Uniswap's <code>tick &lt;= tickCurrent</code>, and <code>liquidity_gross == 0</code> returns early so the caller drops the node — tick set cannot be grown for free.</li>
+<li><strong>I4 — sentinel tick.</strong> a2b crossings set <code>current_tick_index = next - 1</code>, b2a set <code>next</code> (<code>pool.move:2905-2925</code>). I re-derived the branch agreement between the <em>price</em>-based selector in <code>get_liquidity_by_amount</code> and the <em>tick</em>-based selector in <code>get_amount_by_liquidity</code> for the crossing state (<code>price == p_T</code>, <code>tick == T-1</code>): both select the same branch for every position boundary (<code>lower == T</code>, <code>upper == T</code>, <code>upper == T-1</code>). No mispriced deposit/withdrawal.</li>
+<li><strong>I5 — receipt linearity.</strong> <code>AddLiquidityReceipt</code> (<code>pool.move:220</code>), <code>FlashSwapReceipt</code> (<code>:208</code>), <code>FlashLoanReceipt</code> (<code>:233</code>) declare <strong>no abilities</strong>. They cannot be dropped, stored or transferred, so the paired repay call is mandatory in the same transaction.</li>
+<li><strong>I6 — pending is a counter, not a flag.</strong> <code>mark_pending_add_liquidity</code> increments, <code>clear</code> decrements and removes at zero, <code>remove_liquidity</code> asserts absence (<code>pool.move:3069-3092</code>, <code>:769</code>). N outstanding adds require N repays; a second add cannot be used to unblock a removal.</li>
+<li><strong>I7 — the deferred-payment window is economically neutral.</strong> During <code>add_liquidity → repay_add_liquidity</code> the pool's <code>liquidity</code> is inflated without capital, which dilutes fee growth and suppresses slippage. This is <em>not</em> exploitable: the position's claim absorbs exactly the swap flows. Worked example (price 1, symmetric range, <code>L = 10^8</code>, swap <code>Δa = 10^5</code>): the attacker repays <code>(a0, b0)</code>, receives <code>b0</code> back as swap output and <code>b0 − 10^5</code> on removal, and pays <code>a0 + 10^5</code> for <code>a0 + 10^5</code> received — net A = 0, net B = 0, minus fees they largely pay to themselves. Being your own counterparty yields nothing, and the payer is the same account that is owed.</li>
+<li><strong>I8 — price limits are bounded and one-sided.</strong> <code>flash_swap_internal</code> (<code>pool.move:2690-2700</code>): a2b requires <code>current &gt; limit &gt;= min_sqrt_price()</code>, b2a requires <code>current &lt; limit &lt;= max_sqrt_price()</code>. <code>current_sqrt_price</code> can never leave <code>[min, max]</code>, so no out-of-range tick computation.</li>
+<li><strong>I9 — flash-loan fee</strong> is <code>ceil(amount * fee_rate / 1e6)</code> and repayment is asserted equal to <code>amount + fee_amount</code> from the receipt (<code>pool.move:1548-1628</code>, <code>2767-2800</code>); the receipt carries <code>fee_amount</code>, so it cannot be recomputed by the borrower.</li>
+<li><strong>I10 — rounding favours the pool everywhere.</strong> deposit amounts <code>ceil</code>, withdrawal amounts <code>floor</code>, liquidity from amount <code>floor</code>, fee growth <code>floor</code>, protocol fee <code>ceil</code>, flash-loan fee <code>ceil</code>. Round trips always lose, never gain.</li>
+<li><strong>I11 — no shared-object growth DoS.</strong> I specifically tested the hypothesis "<code>open_position</code> spam inflates the <code>Pool</code> past Sui's per-object limit". Two facts kill it: (a) <code>move_stl::linked_table</code> stores every node via <code>sui::dynamic_field::add(&amp;mut table.id, k, node)</code> (<code>CetusProtocol/move-stl@mainnet-v1.3.0</code>, <code>sources/linked_table.move:7-45</code>), so <code>PositionInfo</code> and tick nodes are <strong>child objects</strong>, not bytes in <code>Pool</code>; (b) the limit itself is real (<code>max_move_object_size: Some(250 * 1024)</code> in <code>sui-protocol-config</code>, enforced as <code>ExecutionErrorKind::MoveObjectTooBig</code> in <code>sui-types/src/object.rs:118-137</code>) but unreachable from positions/ticks. Position spam costs the attacker gas and buys nothing.</li>
+<li><strong>I12 — rewarder.</strong> <code>settle</code> early-returns on <code>liquidity == 0</code> (<code>rewarder.move:246-251</code>, no division by zero), <code>update_emission</code> requires a one-day top-up in the vault before <em>raising</em> a rate (<code>:293-322</code>), and there is no <code>remove_rewarder</code>, so position <code>rewards</code> vectors cannot be re-indexed against the wrong rewarder.</li>
+<li><strong>I13 — ID-based updaters are non-destructive.</strong> <code>calculate_and_update_fee/_reward/_points</code> take a bare <code>position_id</code> and are therefore callable by anyone, but they call <code>update_fee</code> / <code>update_rewards</code> / <code>update_points</code> (<code>position.move:414-460, 777-880</code>), never the <code>*_and_reset_*</code> variants — a hostile poke can only accelerate an accrual, never zero it.</li>
+<li><strong>I14 — every payout needs the NFT.</strong> <code>collect_fee</code>, <code>collect_reward</code>, <code>remove_liquidity*</code>, <code>close_position</code> take <code>&amp;Position</code> / <code>Position</code>, so Sui's input-ownership rule restricts them to the owner. Nothing pays out on a bare <code>ID</code>.</li>
+</ul>
+<h2>3. Residual findings (all Low / Informational, none bounty-eligible)</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Finding</th>
+<th>Why it is not payable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>N1</td>
+<td><code>collect_fee(..., recalculate = false)</code> and <code>collect_reward(..., false)</code> zero the stored <code>fee_owned</code> / <code>amount_owned</code> without first folding in the growth accrued since the last settle (<code>pool.move:908-957</code>, <code>:960-1010</code>; <code>position.move</code> <code>reset_fee</code> / <code>reset_rewarder</code>). A caller who passes <code>false</code> while the position has unsettled accrual permanently forfeits it — the tokens stay in the pool as surplus.</td>
+<td>Requires the position NFT; the only victim is the caller (or whoever the caller's integration is). Documented footgun, not an exploit.</td>
+</tr>
+<tr>
+<td>N2</td>
+<td><code>close_position</code> does not call <code>assert_no_pending_add_liquidity</code>, while <code>remove_liquidity</code> does (<code>pool.move:865-903</code> vs <code>:769</code>). The "no liquidity op while an add is unpaid" invariant is enforced inconsistently.</td>
+<td>Cannot be monetised: <code>position::close_position</code> requires an empty position, and the counter is only non-zero inside a transaction that must consume the receipt.</td>
+</tr>
+<tr>
+<td>N3</td>
+<td><code>position::is_empty</code> checks liquidity, both <code>fee_owned</code> fields and every <code>rewards[i].amount_owned</code>, but <strong>not <code>points_owned</code></strong> (<code>position.move:734-750</code>). Closing a position silently destroys unclaimed points.</td>
+<td>Self-inflicted (needs the NFT); points have no on-chain value.</td>
+</tr>
+<tr>
+<td>N4</td>
+<td><code>remove_liquidity_with_slippage</code> (<code>pool.move:844-863</code>) has zero test coverage; it is a thin wrapper that settles after paying out and asserts <code>&gt;= min_amount</code>. Reading shows it is safe (assert reverts the whole tx).</td>
+<td>No defect — listed only so the coverage gap is visible.</td>
+</tr>
+</tbody>
+</table>
+<h2>4. Where a bounty-eligible bug could still be hiding</h2>
+<p>Ranked by expected value, given that the source-level money core came back clean:</p>
+<ol>
+<li><strong>Deployed bytecode ≠ this source.</strong> The repo mirrors published modules (<code>Audit/sync-provenance.json</code>, <code>Publication</code> ids in <code>Published.toml</code>). The May 2025 exploit also lived in a <em>dependency</em>, not in the audited file set. Diff the on-chain modules against this tree before concluding anything about the deployed system.</li>
+<li><strong>Older published packages.</strong> Every historical package stays callable (§F1). v1…v13 are not published in this repository; the ACL bit each one uses for <code>emergency_*</code> is the one open question that would convert F1 from "privileged DoS" to "any operational key can freeze the protocol".</li>
+<li><strong>Dependency revisions.</strong> <code>IntegerMate</code> / <code>MoveSTL</code> at <code>mainnet-v1.3.0</code>; the vendored copies were verified numerically here (tick tables, <code>mul_div</code>, <code>mul_shr</code>), but the <em>published</em> revisions must be matched byte-for-byte — <code>integer-mate</code> is where the last $223M lived.</li>
+<li><strong>SDK / router / frontend.</strong> <code>collect_fee(recalculate = false)</code> (N1) becomes a real user-facing loss the moment an integration gets the ordering wrong. Out of scope for this package, in scope for most programmes.</li>
+<li><strong>Sui-framework behaviours</strong> (Clock skew, dynamic-field enumeration, object ownership edge cases) — no defect found, but they are the layer where source review stops.</li>
+</ol>
+<h2>5. Eligibility summary</h2>
+<table>
+<thead>
+<tr>
+<th>Finding</th>
+<th>Severity</th>
+<th>Unprivileged</th>
+<th>Previously known</th>
+<th>Bounty-eligible</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>F1 legacy <code>emergency_unpause</code> freeze</td>
+<td>High/Critical impact</td>
+<td><strong>no</strong> (ACL bit 5)</td>
+<td>no</td>
+<td>unlikely as Critical; defensible as a broken shipped control</td>
+</tr>
+<tr>
+<td>N1 <code>recalculate = false</code> forfeits accrual</td>
+<td>Low</td>
+<td>no (needs NFT)</td>
+<td>documented in-source</td>
+<td>no</td>
+</tr>
+<tr>
+<td>N2 <code>close_position</code> pending check</td>
+<td>Info</td>
+<td>yes, but no effect</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>N3 <code>points_owned</code> not in <code>is_empty</code></td>
+<td>Info</td>
+<td>no (needs NFT)</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>N4 slippage wrapper coverage</td>
+<td>Info</td>
+<td>—</td>
+<td>—</td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p>Nothing in this pass meets the usual bar ("unprivileged third party, no preconditions, direct loss of funds"). That is the finding: on the evidence available in this repository, the v15 unprivileged surface is clean, and the strongest remaining lead for a payable bug is not in <code>pool.move</code> at all — it is the deployed-bytecode and legacy-package comparison of §4.1-4.2.</p>
+<div class="footer">Generated from <code>Audit/finding-F1-legacy-emergency-unpause-brick.md</code>.
+Print this page to PDF (A4) for a signed submission. Line references are to the vendored
+<code>packages/cetus_clmm/sources</code> tree at commit <code>b7c3a5a</code>; v14 references are to
+upstream branch <code>version-14</code>.</div>
+</body></html>

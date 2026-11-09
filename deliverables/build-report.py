@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Render Audit/finding-F1-legacy-emergency-unpause-brick.md to a printable HTML report.
 
-Usage:  python3 deliverables/build-report.py            # -> deliverables/F1-audit-report.html
+Usage:  python3 deliverables/build-report.py                 # F1 report
+        python3 deliverables/build-report.py <report.md>       # any report
 Then:   open the html and print to PDF (A4).
 """
 from __future__ import annotations
@@ -15,8 +16,9 @@ except ImportError:  # pragma: no cover
     sys.exit("pip install --break-system-packages markdown")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SRC = ROOT / "Audit" / "finding-F1-legacy-emergency-unpause-brick.md"
-OUT = ROOT / "deliverables" / "F1-audit-report.html"
+SRC = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else (
+    ROOT / "Audit" / "finding-F1-legacy-emergency-unpause-brick.md")
+OUT = ROOT / "deliverables" / (SRC.stem + ".html")
 
 CSS = """
 @page { size: A4; margin: 18mm 15mm; }
